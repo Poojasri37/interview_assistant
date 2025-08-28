@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html>
+<head><title>Org Login</title></head>
+<body>
+  <h2>Organization Login</h2>
+  {% if error %}<p style="color:red">{{ error }}</p>{% endif %}
+  <form method="POST">
+    <input type="email" name="email" placeholder="email" required><br>
+    <input type="password" name="password" placeholder="password" required><br>
+    <button type="submit">Login</button>
+  </form>
+</body>
+</html>

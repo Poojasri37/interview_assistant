@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Upload Resume</title>
+</head>
+<body>
+    <h2>Upload Your Resume</h2>
+    {% if error %}
+        <p style="color:red">{{ error }}</p>
+    {% endif %}
+    <form method="POST" enctype="multipart/form-data">
+        <label for="resume">Upload Resume (PDF):</label><br>
+        <input type="file" name="resume" accept=".pdf" required><br><br>
+
+        <label for="email">Enter Email (Optional):</label><br>
+        <input type="email" name="email" placeholder="your@email.com"><br><br>
+
+        <button type="submit">Continue</button>
+    </form>
+</body>
+</html>

@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head><title>Org Dashboard</title></head>
+<body>
+  <h2>Organization Dashboard</h2>
+  <form method="POST" action="/org/email_top">
+    <label>Top N:</label>
+    <input type="number" name="top_n" value="3">
+    <button type="submit">Email Top</button>
+  </form>
+
+  <h3>Leaderboard</h3>
+  <table border="1" cellpadding="6">
+    <tr><th>Candidate</th><th>Avg Score</th><th>View</th></tr>
+    {% for r in rows %}
+      <tr>
+        <td>{{ r.candidate_id }}</td>
+        <td>{{ "%.2f"|format(r.avg_score) }}</td>
+        <td><a href="/org/candidate/{{ r.candidate_id }}">View</a></td>
+      </tr>
+    {% endfor %}
+  </table>
+</body>
+</html>

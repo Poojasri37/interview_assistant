@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AI Interview Assistant</title>
+</head>
+<body>
+    <h2>Upload Your Resume</h2>
+    <form method="POST" enctype="multipart/form-data">
+        <input type="file" name="resume" accept=".pdf" required>
+        <input type="submit" value="Upload">
+    </form>
+
+    {% if uploaded %}
+        <h3>Ask a question about your resume:</h3>
+        <input type="text" id="question">
+        <button onclick="askQuestion()">Ask</button>
+        <p><strong>Response:</strong> <span id="answer"></span></p>
+    {% endif %}
+
+    <script>
+        async function askQuestion() {
+            const question = document.getElementById("question").value;
+            const res = await fetch("/ask", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ question: question })
+            });
+            const data = await res.json();
+            document.getElementById("answer").innerText = data.answer;
+        }
+    </script>
+</body>
+</html>

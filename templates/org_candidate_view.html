@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head><title>Candidate</title></head>
+<body>
+  <h2>Candidate: {{ candidate.id }}</h2>
+  <p>Finished: {{ candidate.finished }}</p>
+
+  <h3>Answers</h3>
+  <ul>
+    {% for a in answers %}
+      <li>
+        <strong>Q:</strong> {{ a.question }}<br>
+        <strong>A:</strong> {{ a.answer }}<br>
+        <strong>Score:</strong> {{ a.score }}<br>
+        {% if a.explanation %}<strong>Explanation:</strong> {{ a.explanation }}{% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+</body>
+</html>

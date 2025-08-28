@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Leaderboard</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    h2 { color: #2c3e50; }
+    table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+    th, td { border: 1px solid #ccc; padding: 10px; text-align: center; }
+    th { background: #34495e; color: #fff; }
+    .admin-section { margin-top: 30px; padding: 20px; border: 1px solid #ddd; border-radius: 8px; background: #f9f9f9; }
+    button { background: #27ae60; color: #fff; border: none; padding: 10px 15px; cursor: pointer; border-radius: 6px; }
+    button:hover { background: #1e8449; }
+  </style>
+</head>
+<body>
+  <h2>Leaderboard</h2>
+  <table>
+    <tr>
+      <th>Candidate ID</th>
+      <th>Resume Score</th>
+      <th>Interview Score</th>
+      <th>Total Score (/100)</th>
+    </tr>
+    {% for r in rows %}
+      <tr>
+        <td>{{ r.candidate_id }}</td>
+        <td>{{ r.resume_score }}</td>
+        <td>{{ r.interview_score }}</td>
+        <td>{{ r.total_score }}</td>
+      </tr>
+    {% endfor %}
+  </table>
+
+  <div class="admin-section">
+    <h3>Organization Panel</h3>
+    <form method="post" action="/confirm-selection">
+      <p>Select Top Candidates:</p>
+      {% for r in rows %}
+        <input type="checkbox" name="selected_candidates" value="{{ r.candidate_id }}">
+        {{ r.candidate_id }} (Score: {{ r.total_score }})<br>
+      {% endfor %}
+      <button type="submit">Confirm & Send Emails</button>
+    </form>
+  </div>
+</body>
+</html>

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Interview Finished</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    h2 { color: #2c3e50; }
+    .score-summary { background: #f4f4f4; padding: 15px; margin-bottom: 20px; border-radius: 8px; }
+    ul { list-style: none; padding: 0; }
+    li { margin-bottom: 15px; padding: 10px; background: #fff; border: 1px solid #ddd; border-radius: 6px; }
+    strong { color: #34495e; }
+    a.button { background: #2980b9; color: #fff; padding: 10px 15px; text-decoration: none; border-radius: 6px; }
+    a.button:hover { background: #1c5980; }
+  </style>
+</head>
+<body>
+  <h2>Interview Completed</h2>
+  <div class="score-summary">
+    <p><strong>Candidate ID:</strong> {{ candidate.id }}</p>
+    <p><strong>Resume Score:</strong> {{ resume_score }}/50</p>
+    <p><strong>Interview Score:</strong> {{ interview_score }}/50</p>
+    <h3>Total Score: <span style="color: green;">{{ total_score }}/100</span></h3>
+  </div>
+
+  <h3>Your Answers:</h3>
+  <ul>
+    {% for a in answers %}
+      <li>
+        <strong>Q:</strong> {{ a.question }}<br>
+        <strong>A:</strong> {{ a.answer }}<br>
+        <strong>Score:</strong> {{ a.score }}<br>
+        {% if a.explanation %}<strong>Explanation:</strong> {{ a.explanation }}{% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+
+  <a href="/leaderboard" class="button">See Leaderboard</a>
+</body>
+</html>

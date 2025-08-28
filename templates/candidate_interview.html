@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>AI Interview</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f9f9f9; text-align: center; padding: 20px; }
+    video { width: 420px; height: auto; margin: 15px auto; display: block; background: #000; }
+    #status { font-weight: bold; margin-top: 10px; font-size: 18px; }
+    #questionText { margin: 8px auto; font-size: 20px; width: 85%; }
+    #transcript { background: #fff; padding: 10px; border: 1px solid #ccc; width: 85%; margin: 15px auto; height: 120px; overflow-y: auto; text-align: left; }
+    #startBtn { background: #4CAF50; color: white; border: none; padding: 12px 24px; font-size: 18px; cursor: pointer; border-radius: 6px; }
+    #startBtn[disabled] { background: #9f9f9f; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <h1>AI Interview</h1>
+
+  <video id="videoPlayer" preload="auto" playsinline muted></video>
+  <div id="status">Loading first question...</div>
+  <div id="questionText"></div>
+  <div id="transcript">(Your answer will appear here)</div>
+  <button id="startBtn">Start Interview</button>
+
+  <script>
+    const videoPlayer = document.getElementById("videoPlayer");
+    const statusDiv = document.getElementById("status");
+    const questionDiv = document.getElementById("questionText");
+    const transcriptDiv = document.getElementById("transcript");
+    const startBtn = document.getElementById("startBtn");
+
+    const videos = {
+      question: "/static/videos/questioning.mp4",
+      listening: "/static/videos/listening.mp4",
+      explaining: "/static/videos/explaining.mp4"
+    };
+
+    let mediaRecorder;
+    let audioChunks = [];
+    let interviewRunning = false;
+
+    // ---------- NEW: speech synthesis ----------
+    function speak(text) {
+      try {
+        if (!text) return;
+        // stop any ongoing speech to avoid overlap
+        window.speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(text);
+        // (Optional) prefer an English voice; browser picks default if unavailable
+        const voices = window.speechSynthesis.getVoices();
+        const prefer = voices.find(v =>
+          /en-|English/i.test(v.lang || v.name)
+        );
+        if (prefer) u.voice = prefer;
+        u.rate = 1.0;   // normal pace
+        u.pitch = 1.0;  // normal pitch
+        window.speechSynthesis.speak(u);
+      } catch (e) {
+        console.warn("TTS failed:", e);
+      }
+    }
+    // in some browsers voices load async; prime them after a user gesture as well
+    window.speechSynthesis.onvoiceschanged = () => {/* no-op; ensures voices list populates */};
+
+    async function fetchNextQuestion() {
+      const res = await fetch("/candidate/next_question", { cache: "no-store" });
+      return await res.json();
+    }
+
+    async function sendAnswer(blob) {
+      const formData = new FormData();
+      formData.append("audio", blob, "answer.webm");
+      const res = await fetch("/candidate/answer", { method: "POST", body: formData });
+      return await res.json();
+    }
+
+    function playVideo(src) {
+      return new Promise((resolve) => {
+        videoPlayer.onended = () => resolve();
+        videoPlayer.onerror = () => resolve(); // don't block interview on video error
+        videoPlayer.src = src;
+        const p = videoPlayer.play();
+        if (p && typeof p.catch === "function") {
+          p.catch(() => {
+            // if autoplay fails (policy), unmute and try play on user gesture (start button covers first)
+            videoPlayer.muted = false;
+          });
+        }
+      });
+    }
+
+    async function startRecording() {
+      transcriptDiv.textContent = "(Listening...)";
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (err) {
+        statusDiv.textContent = "Microphone permission denied. Please allow mic access.";
+        throw err;
+      }
+
+      audioChunks = [];
+      // try an explicit opus MIME for better support
+      const options = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? { mimeType: "audio/webm;codecs=opus" }
+        : {};
+      mediaRecorder = new MediaRecorder(stream, options);
+      mediaRecorder.ondataavailable = e => { if (e.data && e.data.size > 0) audioChunks.push(e.data); };
+      mediaRecorder.start();
+
+      // Stop mic after 10 seconds
+      await new Promise(r => setTimeout(r, 10000));
+      await stopRecording();
+      // Clean up tracks
+      stream.getTracks().forEach(t => t.stop());
+    }
+
+    function stopRecording() {
+      return new Promise(resolve => {
+        if (!mediaRecorder) return resolve();
+        mediaRecorder.onstop = resolve;
+        try { mediaRecorder.stop(); } catch (_) { resolve(); }
+      });
+    }
+
+    async function startInterview() {
+      startBtn.disabled = true;
+      startBtn.style.display = "none";
+      interviewRunning = true;
+
+      while (interviewRunning) {
+        const data = await fetchNextQuestion();
+        if (data.done) {
+          statusDiv.textContent = "Interview Completed! Redirecting...";
+          setTimeout(() => window.location.href = "/candidate/finish", 1200);
+          return;
+        }
+
+        const currentQuestion = data.question || "";
+        questionDiv.textContent = currentQuestion;
+
+        // ---------- NEW: speak the question after user gesture (button click) ----------
+        speak(currentQuestion);
+
+        // Question phase (play “questioning” video)
+        statusDiv.textContent = "Question Phase...";
+        await playVideo(videos.question);
+
+        // Listening phase: record 10s while “listening” video plays in parallel
+        statusDiv.textContent = "Listening to your answer (10s)...";
+        playVideo(videos.listening);  // don't await; play while recording
+        try {
+          await startRecording();
+        } catch (e) {
+          // If mic fails, continue but send empty blob
+          console.warn("Recording failed, sending empty audio", e);
+          const emptyBlob = new Blob([], { type: "audio/webm" });
+          const res = await sendAnswer(emptyBlob);
+          transcriptDiv.textContent = res.transcript || "(no transcript)";
+
+          // If backend provided an explanation, speak it while showing explaining video
+          if (res.explanation) {
+            statusDiv.textContent = "Showing explanation...";
+            speak(res.explanation);
+            await playVideo(videos.explaining);
+          }
+
+          if (res.done) {
+            statusDiv.textContent = "Interview Completed! Redirecting...";
+            setTimeout(() => window.location.href = "/candidate/finish", 1200);
+            return;
+          }
+          continue;
+        }
+
+        // Upload recorded audio
+        const blobType = mediaRecorder && mediaRecorder.mimeType ? mediaRecorder.mimeType : "audio/webm";
+        const audioBlob = new Blob(audioChunks, { type: blobType });
+        statusDiv.textContent = "Processing your answer...";
+        const res = await sendAnswer(audioBlob);
+
+        // Show transcript
+        transcriptDiv.textContent = res.transcript || "(no transcript)";
+
+        // Explanation phase (optional)
+        statusDiv.textContent = "Showing explanation...";
+        await playVideo(videos.explaining);
+
+        // ---------- NEW: speak the explanation if provided ----------
+        if (res.explanation) {
+          speak(res.explanation);
+        }
+
+        if (res.done) {
+          statusDiv.textContent = "Interview Completed! Redirecting...";
+          setTimeout(() => window.location.href = "/candidate/finish", 1200);
+          return;
+        }
+
+        // Loop continues to next question automatically
+        statusDiv.textContent = "Next question coming up...";
+      }
+    }
+
+    startBtn.addEventListener("click", () => {
+      // prime voices after a user gesture to satisfy autoplay policies
+      window.speechSynthesis.getVoices();
+      startInterview();
+    });
+
+    // Preload first question text for UI (no speech here to avoid autoplay issues)
+    (async () => {
+      try {
+        const data = await fetchNextQuestion();
+        if (data.done) {
+          statusDiv.textContent = "No questions available.";
+          return;
+        }
+        document.getElementById("questionText").textContent = data.question || "";
+        statusDiv.textContent = "Ready to start.";
+      } catch (e) {
+        statusDiv.textContent = "Unable to load question. Check server.";
+      }
+    })();
+  </script>
+</body>
+</html>

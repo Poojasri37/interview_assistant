@@ -1,0 +1,19 @@
+flask
+jinja2
+langchain==0.1.16
+langchain-community==0.0.34
+langchain-huggingface==0.0.1
+langchain-chroma==0.1.4
+chromadb==0.5.3        # ✅ Compatible with langchain-chroma
+transformers==4.41.2
+sentence-transformers==2.6.0
+torch>=2.1.0
+pymupdf
+SpeechRecognition
+gTTS
+soundfile
+pydub
+tf-keras
+sqlalchemy
+email-validator
+python-dotenv

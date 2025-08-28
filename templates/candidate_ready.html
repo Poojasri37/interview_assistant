@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Ready for Interview</title>
+</head>
+<body>
+    <h2>Resume Uploaded Successfully!</h2>
+
+    {% if email %}
+        <p>Email provided: <strong>{{ email }}</strong></p>
+        <button onclick="sendConfirmation()">Send Confirmation Email</button>
+        <p id="msg"></p>
+        <script>
+            function sendConfirmation() {
+                fetch('/send_confirmation', {method: 'POST'})
+                .then(res => res.json())
+                .then(data => document.getElementById('msg').innerText = data.message);
+            }
+        </script>
+    {% else %}
+        <p>No email provided. You can still proceed to the interview.</p>
+    {% endif %}
+
+    <br>
+    <a href="{{ url_for('candidate_interview') }}">
+        <button>Start Interview</button>
+    </a>
+</body>
+</html>
