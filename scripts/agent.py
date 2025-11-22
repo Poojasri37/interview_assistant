@@ -1,7 +1,7 @@
 import os
 import random
 import threading
-from typing import Callable, Optional
+from typing import Callable, Optional, Dict, Any
 
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -16,7 +16,7 @@ MODEL_ID = os.getenv("LOCAL_LLM_ID", "TinyLlama/TinyLlama-1.1B-Chat-v1.0")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 TOP_K = int(os.getenv("RAG_TOP_K", "3"))
 
-_LLM = None  # cached HF pipeline
+_LLM: Optional[HuggingFacePipeline] = None  # cached HF pipeline
 
 EXPLAIN_TRIGGERS = {
     "explain",
@@ -35,7 +35,10 @@ def warm_llm():
 
 
 def generate_25_questions(candidate_id: str, resume_text: str):
-    """Static question set for now (resume-grounded generation can be added later)."""
+    """
+    Legacy helper: static question set (not used by app.py now, which uses Gemini).
+    Kept for compatibility / debugging.
+    """
     base = [
         "Summarize your most impactful project.",
         "Explain the biggest technical challenge you solved.",
@@ -68,44 +71,87 @@ def generate_25_questions(candidate_id: str, resume_text: str):
 
 
 def handle_candidate_text_answer_fast(
-    transcript: str,
-    question: str,
     candidate_id: str,
+    question: str,
+    transcript: str,
     force_next_if_empty: bool = True,
     no_response_token: str = "[NO RESPONSE]",
-):
+) -> Dict[str, Any]:
     """
-    Decide immediate action (non-blocking):
-      - "explain": return a RAG-grounded explanation of the question
-      - "next":   accept the answer (even empty if force_next_if_empty=True)
-      - "retry":  ask the candidate to repeat
+    Synchronous scoring used by app.py.
+
+    Returns:
+      {
+        "score": float,
+        "explanation": Optional[str]
+      }
     """
     transcript = (transcript or "").strip()
 
-    if _is_explain_trigger(transcript):
-        explanation = _rag_answer(candidate_id, "candidate", f"Explain the question: {question}")
+    # No speech captured
+    if not transcript:
+        if not force_next_if_empty:
+            return {
+                "score": 0.0,
+                "explanation": "No answer captured; please repeat."
+            }
         return {
-            "action": "explain",
-            "transcript": transcript,
-            "explanation": explanation,
-            "score": None,
+            "score": 0.0,
+            "explanation": "No answer detected. Try speaking a bit louder or closer to the mic."
         }
 
-    if not transcript:
-        if force_next_if_empty:
-            return {
-                "action": "next",
-                "transcript": no_response_token,
-                "score": None,
-            }
-        else:
-            return {"action": "retry", "transcript": "", "score": None}
+    # Candidate explicitly asks for explanation instead of answering
+    if _is_explain_trigger(transcript):
+        try:
+            explanation = _rag_answer(
+                candidate_id,
+                "candidate",
+                f"Explain this interview question in simple terms and give a short model answer: {question}"
+            )
+        except Exception as e:
+            explanation = f"Explanation failed: {e}"
+        # Score is 0 here because they didn't really answer
+        return {
+            "score": 0.0,
+            "explanation": explanation
+        }
 
-    # Normal answered path -> next
+    # Normal scoring path
+    try:
+        score = score_answer_with_llm(
+            llm=_load_llm(),
+            question=question,
+            answer=transcript,
+            candidate_id=candidate_id,
+        )
+    except Exception as e:
+        return {
+            "score": 0.0,
+            "explanation": f"Scoring failed: {e}"
+        }
+
+    explanation: Optional[str] = None
+    # If score is low, give RAG-based explanation/feedback using the resume vector DB
+    try:
+        if score is not None and float(score) < 4.0:
+            explanation = _rag_answer(
+                candidate_id,
+                "candidate",
+                f"""
+You are an interview coach.
+The question was: {question}
+The candidate answered: {transcript}
+
+1) Briefly explain what a strong answer should include.
+2) Tell the candidate how they can improve their answer next time.
+                """.strip()
+            )
+    except Exception as e:
+        explanation = f"Could not generate detailed explanation: {e}"
+
     return {
-        "action": "next",
-        "transcript": transcript,
-        "score": None,
+        "score": float(score) if score is not None else 0.0,
+        "explanation": explanation,
     }
 
 
@@ -115,7 +161,9 @@ def async_score_answer_text(
     candidate_id: str,
     save_func: Callable[[float, Optional[str]], None],
 ):
-    """Score answer in a background thread (so the UI stays snappy)."""
+    """
+    Legacy async scorer (not used by current app.py, but kept for completeness).
+    """
 
     def _task():
         try:
@@ -138,8 +186,8 @@ def async_score_answer_text(
 def explain_last_question(user_id: str, last_question: str) -> str:
     return _rag_answer(user_id, "candidate", f"Explain the question '{last_question}' in simple terms.")
 
-# -------------------- INTERNALS --------------------
 
+# -------------------- INTERNALS --------------------
 def _load_llm():
     global _LLM
     if _LLM is not None:
@@ -160,6 +208,10 @@ def _load_llm():
 
 
 def _get_retriever(user_id: str, role: str):
+    """
+    Load FAISS vectorstore for the given user+role and return a retriever.
+    This uses the embeddings created by scripts.utils.embedder.embed_resume.
+    """
     path = f"vectorstore/{role}/{user_id}"
     embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
     vectordb = FAISS.load_local(path, embeddings, allow_dangerous_deserialization=True)
@@ -167,6 +219,11 @@ def _get_retriever(user_id: str, role: str):
 
 
 def _rag_answer(user_id: str, role: str, question: str) -> str:
+    """
+    RAG over user's resume:
+      - FAISS + sentence-transformers embeddings
+      - Local LLM (TinyLlama by default)
+    """
     llm = _load_llm()
     retriever = _get_retriever(user_id, role)
     qa = RetrievalQA.from_chain_type(llm=llm, retriever=retriever)
@@ -174,7 +231,7 @@ def _rag_answer(user_id: str, role: str, question: str) -> str:
 
 
 def _is_explain_trigger(t: str) -> bool:
-    t_norm = t.lower().strip()
+    t_norm = (t or "").lower().strip()
     if t_norm in EXPLAIN_TRIGGERS:
         return True
     if "explain" in t_norm and len(t_norm.split()) <= 6:

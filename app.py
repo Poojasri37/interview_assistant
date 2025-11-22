@@ -13,8 +13,7 @@ from email.mime.text import MIMEText
 from scripts.utils.parser import extract_text_from_pdf
 from scripts.utils.embedder import embed_resume
 from scripts.agent import (
-    generate_25_questions,
-    handle_candidate_text_answer_fast,  # must return dict with keys: score, explanation (or None)
+    handle_candidate_text_answer_fast,  # returns dict: {"score": float, "explanation": str|None}
     warm_llm,
 )
 from scripts.db import (
@@ -22,9 +21,9 @@ from scripts.db import (
     get_candidate, get_leaderboard, get_candidate_answers, update_candidate_score
 )
 from scripts.org import require_org_auth
+from scripts.question_generator import generate_questions_with_gemini  # NEW
 
 # ------------------------- CONFIG -------------------------
-# Keep TF knobs out of the way if present in some deps
 os.environ["USE_TF"] = "0"
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
@@ -37,7 +36,6 @@ app.secret_key = os.getenv("FLASK_SECRET", "change-me")
 for d in ["data/candidate", "data/org", "vectorstore/candidate", "vectorstore/org", "audio", "static/videos", "templates"]:
     os.makedirs(d, exist_ok=True)
 
-# Init DB and warm local LLM (if your agent uses it)
 init_db("answers.db")
 warm_llm()
 
@@ -47,7 +45,6 @@ whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int
 
 # ------------------------- HELPERS -------------------------
 def transcribe_audio_whisper(path: str) -> str:
-    # Faster-whisper returns segments; we stitch text together
     segments, _ = whisper_model.transcribe(path, beam_size=1)
     return " ".join([seg.text for seg in segments]).strip()
 
@@ -67,10 +64,9 @@ def candidate_upload_page():
     if not file or not file.filename.lower().endswith(".pdf"):
         return render_template("candidate_upload.html", error="Upload a valid PDF file (.pdf).")
 
-    # Optional email (no validation required)
+    # Optional email
     email = (request.form.get("email") or "").strip() or None
 
-    # Create candidate id and session
     cid = str(uuid.uuid4())
     session["candidate_id"] = cid
 
@@ -80,36 +76,39 @@ def candidate_upload_page():
     pdf_path = os.path.join(c_dir, "resume.pdf")
     file.save(pdf_path)
 
-    # Extract text & embed
+    # Extract text
     try:
         resume_text = extract_text_from_pdf(pdf_path)
     except Exception as e:
         return render_template("candidate_upload.html", error=f"Failed to read PDF: {e}")
 
+    # Embed resume into vector DB for RAG
     try:
         embed_resume(resume_text, user_id=cid, role="candidate")
     except Exception as e:
-        # Non-fatal: you can still proceed with static questions
         print(f"[WARN] Embedding resume failed: {e}")
 
     # Create candidate record
     create_candidate(cid, email=email)
 
-    # Generate questions
+    # Generate domain-specific questions using Gemini, grounded in resume
     try:
-        questions = generate_25_questions(cid, resume_text)
+        # You can change num_questions here if you want more/less
+        questions = generate_questions_with_gemini(candidate_id=cid, resume_text=resume_text, num_questions=10)
     except Exception as e:
-        print(f"[WARN] generate_25_questions failed: {e}")
+        print(f"[WARN] Gemini question generation failed: {e}")
+        # Fallback generic questions
         questions = [
             "Tell me about your most impactful project.",
-            "Explain the concept of containers and Docker.",
-            "What is your approach to debugging production issues?"
+            "Explain a challenging bug or problem you solved.",
+            "Describe how you applied your core technical skills in a real project.",
+            "Explain a time you worked in a team to deliver a project.",
+            "How do you keep your skills up to date?"
         ]
 
     session["questions"] = questions
     session["q_index"] = 0
 
-    # Ready page with "Start Interview" button
     return render_template("candidate_ready.html")
 
 
@@ -143,7 +142,7 @@ def candidate_next_question():
 def candidate_answer_audio():
     cid = session.get("candidate_id")
     if not cid:
-        return jsonify({"error": "Session expired."}), 440  # 440 Login Time-out (semantically)
+        return jsonify({"error": "Session expired."}), 440
 
     audio = request.files.get("audio")
     if not audio:
@@ -157,9 +156,9 @@ def candidate_answer_audio():
     wav_path = os.path.join(c_dir, f"answer_{ts}.wav")
     audio.save(raw_path)
 
-    # Convert to wav (mono/16k) for whisper
+    # Convert to wav
     try:
-        sound = AudioSegment.from_file(raw_path)  # requires ffmpeg on PATH
+        sound = AudioSegment.from_file(raw_path)
         sound = sound.set_frame_rate(16000).set_channels(1)
         sound.export(wav_path, format="wav")
     except Exception as e:
@@ -170,7 +169,6 @@ def candidate_answer_audio():
         except Exception:
             pass
 
-    # Get current question
     q_index = session.get("q_index", 0)
     questions = session.get("questions", [])
     if q_index >= len(questions):
@@ -187,16 +185,13 @@ def candidate_answer_audio():
         transcript = ""
         print(f"[WARN] Transcription failed: {e}")
 
-    # Ask agent to (quickly) decide/store scoring info
+    # Score + explanation using local LLM + RAG
     try:
-        # IMPORTANT: handle_candidate_text_answer_fast should return a dict
-        # with keys: score (float or None), explanation (str or None)
         result = handle_candidate_text_answer_fast(
             candidate_id=cid,
             question=current_question,
             transcript=transcript
         )
-        # Backward-compat: if a float is returned, wrap it
         if isinstance(result, (int, float)):
             result = {"score": float(result), "explanation": None}
         elif not isinstance(result, dict):
@@ -207,10 +202,8 @@ def candidate_answer_audio():
         print(f"[WARN] Scoring failed: {e}")
         score, explanation = 0.0, f"Scoring failed: {e}"
 
-    # Save in DB
     save_answer(cid, current_question, transcript, score, explanation)
 
-    # Increment question index AFTER saving the answer
     session["q_index"] = q_index + 1
     done = session["q_index"] >= len(questions)
     if done:
@@ -234,9 +227,8 @@ def candidate_finish_page():
     cand = get_candidate(cid)
     answers = get_candidate_answers(cid)
 
-    # Scores
     interview_score = sum([a["score"] for a in answers]) / len(answers) if answers else 0
-    resume_score = 50  # Static for now
+    resume_score = 50
     total_score = round(resume_score * 0.4 + interview_score * 0.6, 2)
 
     return render_template("candidate_finished.html", candidate=cand, answers=answers,
@@ -251,7 +243,11 @@ def leaderboard_view():
         for cid in selected_candidates:
             cand = get_candidate(cid)
             if cand and cand.get("email"):
-                send_email(cand["email"], "You are shortlisted", f"Dear Candidate,\n\nCongratulations! You are shortlisted.")
+                send_email(
+                    cand["email"],
+                    "You are shortlisted",
+                    f"Dear Candidate,\n\nCongratulations! You are shortlisted."
+                )
         return redirect(url_for("leaderboard_view"))
 
     rows = get_leaderboard()
@@ -286,6 +282,7 @@ def org_view_candidate(cid):
         return "Not found", 404
     return render_template("org_candidate_view.html", candidate=cand, answers=answers)
 
+
 # ------------------------- EMAIL UTILITY -------------------------
 def send_email(to_email, subject, body):
     sender_email = os.getenv("ORG_EMAIL")
@@ -306,5 +303,4 @@ def send_email(to_email, subject, body):
 
 
 if __name__ == "__main__":
-    # You can also run via waitress; for local dev, Flask is fine
     app.run(host="127.0.0.1", port=5000, debug=False)
